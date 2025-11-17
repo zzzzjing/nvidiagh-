@@ -1,18 +1,15 @@
 # -*- coding: utf-8 -*-
 """
 CloudLab Profile for NVIDIA GH200 (nvidiagh) + H100
-- Python 2 compatible
-- 参数: nodes, image_urn
-- 自动安装 Docker 与 NVIDIA Container Toolkit，开启持久化并自检
+Python 2 compatible, no Tour section.
 """
 import geni.portal as portal
 import geni.rspec.pg as PG
-import geni.rspec.igext as IG   # <-- Tour 在 igext 里
 
 pc = portal.Context()
 req = pc.makeRequestRSpec()
 
-# -------- Parameters --------
+# ---------------- Parameters ----------------
 pc.defineParameter("nodes", "Number of nodes",
                    portal.ParameterType.INTEGER, 1,
                    longDescription="How many nvidiagh nodes to allocate (1-16)")
@@ -22,17 +19,7 @@ pc.defineParameter("image_urn", "Disk image URN",
                    longDescription="Keep default unless you have a custom image")
 params = pc.bindParameters()
 
-# -------- Safe Tour text (纯 ASCII，避免 XML 控制字符) --------
-tour = IG.Tour()
-tour.Description("Profile for NVIDIA GH200 (nvidiagh) node(s) with one H100 GPU.")
-tour.Instructions(
-    "After the experiment is ready, SSH to the node(s). "
-    "Docker and the NVIDIA Container Toolkit will be installed automatically. "
-    "Verify with: docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi"
-)
-req.addTour(tour)
-
-# -------- Per-node setup script --------
+# ---------------- Per-node setup script ----------------
 SETUP_BASH = r"""#!/usr/bin/env bash
 set -eux
 
@@ -94,11 +81,11 @@ def add_node(idx):
     node.hardware_type = "nvidiagh"
     node.disk_image = params.image_urn
 
-    # 通过 Execute 下发脚本并执行
+    # Upload & run the setup script
     cmd = "bash -lc 'cat >/tmp/setup.sh <<\"EOS\"\n" + SETUP_BASH + "\nEOS\nsudo bash /tmp/setup.sh'\n"
     node.addService(PG.Execute(shell="bash", command=cmd))
 
-    # 可选: 打印 NVMe 信息
+    # Optional: NVMe info
     node.addService(PG.Execute(shell="bash",
         command="bash -lc \"echo '[INFO] Local NVMe:'; lsblk -o NAME,SIZE,MODEL || true\""))
     return node
@@ -107,7 +94,7 @@ nodes = []
 for i in range(int(params.nodes)):
     nodes.append(add_node(i))
 
-# 多节点时拉一条 LAN
+# Multi-node LAN (optional)
 if int(params.nodes) > 1:
     lan = PG.LAN("lan")
     for j, n in enumerate(nodes):
