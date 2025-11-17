@@ -4,11 +4,11 @@ CloudLab Profile for NVIDIA GH200 (nvidiagh) + H100
 
 - 申请 nvidiagh 节点（默认 1 台）
 - Ubuntu 22.04 镜像
-- 开机自动安装 Docker 与 NVIDIA Container Toolkit
+- 自动安装 Docker 与 NVIDIA Container Toolkit
 - 开启 GPU 持久化并做 nvidia-smi 自检
 - 多节点时自动拉一条 LAN
 
-兼容 Python 2（CloudLab Profile 解析器要求）。
+兼容 Python 2（CloudLab 的解析器常用）。
 """
 
 import geni.portal as portal
@@ -18,18 +18,15 @@ pc = portal.Context()
 req = pc.makeRequestRSpec()
 
 # ---------- Parameters ----------
-p_nodes = pc.bindParameter(portal.Parameter(
-    "nodes", portal.ParameterType.INTEGER, "Number of nodes",
-    longDescription="How many nvidiagh nodes to allocate",
-    defaultValue=1, min=1, max=16))
+pc.defineParameter("nodes", "Number of nodes",
+                   portal.ParameterType.INTEGER, 1,
+                   longDescription="How many nvidiagh nodes to allocate (1-16)")
+pc.defineParameter("image_urn", "Disk image URN",
+                   portal.ParameterType.STRING,
+                   "urn:publicid:IDN+utah.cloudlab.us+image+Canonical:ubuntu-22.04",
+                   longDescription="Keep default unless you have a custom image")
 
-p_image = pc.bindParameter(portal.Parameter(
-    "image_urn", portal.ParameterType.STRING, "Disk image URN",
-    longDescription="Leave default unless you have a custom image",
-    defaultValue="urn:publicid:IDN+utah.cloudlab.us+image+Canonical:ubuntu-22.04"
-))
-
-pc.verifyParameters()
+params = pc.bindParameters()
 
 # ---------- Setup script (run on each node) ----------
 SETUP_BASH = r"""#!/usr/bin/env bash
@@ -95,23 +92,23 @@ echo "[DONE] Setup complete."
 def add_node(idx):
     node = req.RawPC("node%d" % (idx + 1))
     node.hardware_type = "nvidiagh"
-    node.disk_image = p_image.value
+    node.disk_image = params.image_urn
 
-    # 将 SETUP_BASH 下发到节点并执行
+    # 以 “下发脚本文件 + 执行” 的方式运行 SETUP_BASH
     setup_cmd = "bash -lc 'cat >/tmp/setup.sh <<\"EOS\"\n" + SETUP_BASH + "\nEOS\nsudo bash /tmp/setup.sh'\n"
     node.addService(pg.Execute(shell="bash", command=setup_cmd))
 
     # 打印 NVMe 信息（可选）
-    node.addService(pg.Execute(shell="bash", command="bash -lc \"echo '[INFO] Local NVMe:'; lsblk -o NAME,SIZE,MODEL || true\""))
-
+    node.addService(pg.Execute(shell="bash",
+                               command="bash -lc \"echo '[INFO] Local NVMe:'; lsblk -o NAME,SIZE,MODEL || true\""))
     return node
 
 nodes = []
-for i in range(p_nodes.value):
+for i in range(int(params.nodes)):
     nodes.append(add_node(i))
 
 # 多节点时加一条 LAN
-if p_nodes.value > 1:
+if int(params.nodes) > 1:
     lan = pg.LAN("lan")
     for j, n in enumerate(nodes):
         iface = n.addInterface("if%d" % (j + 1))
