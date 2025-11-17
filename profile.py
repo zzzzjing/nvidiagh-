@@ -1,23 +1,15 @@
 # -*- coding: utf-8 -*-
 """
 CloudLab Profile for NVIDIA GH200 (nvidiagh) + H100
-
-- 申请 nvidiagh 节点（默认 1 台）
-- Ubuntu 22.04 镜像
-- 自动安装 Docker 与 NVIDIA Container Toolkit
-- 开启 GPU 持久化并做 nvidia-smi 自检
-- 多节点时自动拉一条 LAN
-
-兼容 Python 2（CloudLab 的解析器常用）。
+Python 2 compatible.
 """
-
 import geni.portal as portal
 import geni.rspec.pg as pg
 
 pc = portal.Context()
 req = pc.makeRequestRSpec()
 
-# ---------- Parameters ----------
+# ---------------- Parameters ----------------
 pc.defineParameter("nodes", "Number of nodes",
                    portal.ParameterType.INTEGER, 1,
                    longDescription="How many nvidiagh nodes to allocate (1-16)")
@@ -28,28 +20,36 @@ pc.defineParameter("image_urn", "Disk image URN",
 
 params = pc.bindParameters()
 
-# ---------- Setup script (run on each node) ----------
+# ---------------- Safe Tour text ----------------
+tour = pg.Tour()
+tour.Description("Profile for NVIDIA GH200 (nvidiagh) nodes with one H100 GPU.")
+tour.Instructions(
+    "After the experiment is ready, SSH to the node(s). "
+    "Docker and the NVIDIA Container Toolkit will be installed automatically. "
+    "Run: docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi"
+)
+req.addTour(tour)
+
+# ---------------- Setup script ----------------
 SETUP_BASH = r"""#!/usr/bin/env bash
 set -euxo pipefail
 
 echo "[INFO] Node: $(hostname)  Arch: $(uname -m)  Kernel: $(uname -r)"
 
-# 0) Base
+# Base packages
 sudo apt-get update -y
 sudo apt-get install -y git curl wget ca-certificates gnupg lsb-release \
   pciutils net-tools htop jq build-essential
 
-# 1) Check driver
+# Check driver
 if command -v nvidia-smi >/dev/null 2>&1; then
-  echo "[INFO] nvidia-smi found:"
   nvidia-smi || true
 else
-  echo "[WARN] nvidia-smi not found. Use a GPU image or install driver."
+  echo "[WARN] nvidia-smi not found. Use a GPU-enabled image or install a driver."
 fi
 
-# 2) Docker
+# Docker
 if ! command -v docker >/dev/null 2>&1; then
-  echo "[INFO] Installing Docker..."
   sudo apt-get remove -y docker docker-engine docker.io containerd runc || true
   sudo apt-get install -y apt-transport-https software-properties-common
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker.gpg
@@ -60,8 +60,7 @@ if ! command -v docker >/dev/null 2>&1; then
   sudo usermod -aG docker $USER || true
 fi
 
-# 3) NVIDIA Container Toolkit
-echo "[INFO] Installing NVIDIA Container Toolkit..."
+# NVIDIA Container Toolkit
 distribution=$(. /etc/os-release; echo $ID$VERSION_ID)
 curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit.gpg
 curl -fsSL https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
@@ -72,13 +71,13 @@ sudo apt-get install -y nvidia-container-toolkit
 sudo nvidia-ctk runtime configure --runtime=docker || true
 sudo systemctl restart docker || true
 
-# 4) Persistence + test
+# Persistence + test
 if command -v nvidia-smi >/dev/null 2>&1; then
   sudo nvidia-smi -pm 1 || true
   docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi || true
 fi
 
-# 5) Minor sysctl for DL
+# Minor sysctl for DL
 sudo bash -c 'cat >/etc/sysctl.d/99-dl-tuning.conf <<EOF
 fs.inotify.max_user_watches=524288
 fs.inotify.max_user_instances=1024
@@ -94,20 +93,20 @@ def add_node(idx):
     node.hardware_type = "nvidiagh"
     node.disk_image = params.image_urn
 
-    # 以 “下发脚本文件 + 执行” 的方式运行 SETUP_BASH
-    setup_cmd = "bash -lc 'cat >/tmp/setup.sh <<\"EOS\"\n" + SETUP_BASH + "\nEOS\nsudo bash /tmp/setup.sh'\n"
-    node.addService(pg.Execute(shell="bash", command=setup_cmd))
+    # Upload and run setup script (avoid embedding control chars in Tour)
+    cmd = "bash -lc 'cat >/tmp/setup.sh <<\"EOS\"\n" + SETUP_BASH + "\nEOS\nsudo bash /tmp/setup.sh'\n"
+    node.addService(pg.Execute(shell="bash", command=cmd))
 
-    # 打印 NVMe 信息（可选）
+    # Optional: NVMe info
     node.addService(pg.Execute(shell="bash",
-                               command="bash -lc \"echo '[INFO] Local NVMe:'; lsblk -o NAME,SIZE,MODEL || true\""))
+        command="bash -lc \"echo '[INFO] Local NVMe:'; lsblk -o NAME,SIZE,MODEL || true\""))
     return node
 
 nodes = []
 for i in range(int(params.nodes)):
     nodes.append(add_node(i))
 
-# 多节点时加一条 LAN
+# Multi-node LAN
 if int(params.nodes) > 1:
     lan = pg.LAN("lan")
     for j, n in enumerate(nodes):
